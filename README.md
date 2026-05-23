@@ -6,6 +6,7 @@ created as a fun project by yours truly. designed to copy various famous synths 
 
 ## research
 i'd strongly reccommend going though these if you wanna make this yourself. doubtless some you've already seen, the astute engineer i'm sure you are... c o u g h
+
 https://www.youtube.com/watch?v=msIQIWeMnBE
 
 https://www.youtube.com/watch?v=Exk_K2VwGu0
