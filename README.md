@@ -4,7 +4,8 @@ code and electrical layout for a fully custom synthesiser using a Teensy 4.0 and
 ## purpose
 created as a fun project by yours truly. designed to copy various famous synths but also build upon random features i though vaugely applicable, everything here is a bit of a mishmash of various ideas and features. but, most importantly, the teensy and complementary audio library allows for extreme modularity and customisation of literally everything. a really cool future project would be to turn this into a fully operating professional synth that allows for the plug in-out nature of modular rack synths, e.g. eurorack. could be implemented through digtally controlled patches or adjustable plugs, could be a cool small form factor modular synth capable to run off a battery.
 
-# research - should read
+## research
+i'd strongly reccommend going though these if you wanna make this yourself. doubtless some you've already seen, the astute engineer i'm sure you are... c o u g h
 https://www.youtube.com/watch?v=msIQIWeMnBE
 
 https://www.youtube.com/watch?v=Exk_K2VwGu0
