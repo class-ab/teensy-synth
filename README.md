@@ -23,6 +23,7 @@ the arduino mega is connected to the keyboard (5 octaves salvaged from a broken 
 - the teensy runs as 3.3v and the arduinos 5v. important to notice for both interchip communication and reading the pot values (i learnt the hard way for the later. several hours of resoldering ensued).
 - DAC and teensy i2s traces were too long. required a tiny Pµ capacitor to fix.
 - teensy did NOT like being a i2c slave while running i2s. it didn't play nice at all, and in the end i made it a i2s master, which is a little weird, but it works i guess? this took a LONG time to figure out, i made a post on the PJRC forum too, no-one found anything, but in the end this fixed it... weird interrupt conflict i think.
+- update: i found this document with a bunch of known Teensy issues. low and behold, the I2C and I2S conflict is mentioned... oh well. next time. https://gist.github.com/somebox/d969f8a97e5a4362af5049ed554a9e69 
 
 ## research
 i'd strongly reccommend going though these if you wanna make this yourself. doubtless some you've already seen, the astute engineer i'm sure you are... c o u g h
