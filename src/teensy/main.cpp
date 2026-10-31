@@ -33,29 +33,29 @@ PotScaling muxPotScaling[10] = {
   {"MUX_0", false},   // VCO1 Detune - LINEAR
   {"MUX_1", false},   // VCO2 Detune - LINEAR
   {"MUX_2", false},   // VCO3 Detune - LINEAR
-  {"MUX_3", false},   // VCO1 Volume - LINEAR
+  {"MUX_3", false},   // Master Volume - LINEAR
   {"MUX_4", false},   // VCO2 Volume - LINEAR
   {"MUX_5", false},   // VCO3 Volume - LINEAR
-  {"MUX_6", false},    // VCF Cutoff - LOGARITHMIC (recommended for filter)
-  {"MUX_7", true},   // VCF Attack - LINEAR
-  {"MUX_8", true},   // VCF Sustain - LINEAR
-  {"MUX_9", true}    // VCF Resonance - LINEAR
+  {"MUX_6", false},    // VCF Cutoff - LINEAR
+  {"MUX_7", true},   // VCF Attack - LOGARITHMIC
+  {"MUX_8", true},   // VCF Sustain - LOGARITHMIC
+  {"MUX_9", true}    // VCF Resonance - LOGARITHMIC
 };
 
 // MEGA Pot Scaling (MEGA_0 through MEGA_15)
 PotScaling megaPotScaling[16] = {
-  {"MEGA_0", true},   // VCF Decay - LINEAR
-  {"MEGA_1", true},   // VCF Release - LINEAR
-  {"MEGA_2", false},   // VCF Env Amount - LINEAR
+  {"MEGA_0", true},   // VCF Decay - LOGARITHMIC
+  {"MEGA_1", false},  // VCF Env Amount - LINEAR
+  {"MEGA_2", false},  // (unused)
   {"MEGA_3", false},   // (unused)
-  {"MEGA_4", true},   // VCA Attack - LINEAR
-  {"MEGA_5", true},   // VCA Decay - LINEAR
+  {"MEGA_4", true},   // VCA Attack - LOGARITHMIC
+  {"MEGA_5", true},   // VCA Decay - LOGARITHMIC
   {"MEGA_6", false},   // (unused)
   {"MEGA_7", false},   // (unused)
-  {"MEGA_8", true},   // VCA Sustain - LINEAR
+  {"MEGA_8", true},   // VCA Sustain - LOGARITHMIC
   {"MEGA_9", false},   // (unused)
   {"MEGA_10", false},  // (unused)
-  {"MEGA_11", true},  // VCA Release - LINEAR
+  {"MEGA_11", true},  // VCA Release - LOGARITHMIC
   {"MEGA_12", false},  // Reverb Roomsize - LINEAR
   {"MEGA_13", false},  // Reverb Damping - LINEAR
   {"MEGA_14", false},  // Reverb Mix - LINEAR
@@ -119,11 +119,10 @@ int reversePotScaling(int scaledValue, bool isLogarithmic) {
 // VCF (Filter) Controls
 #define VCF_CUTOFF     "MUX_6"
 #define VCF_RESONANCE  "MUX_9"
-#define VCF_ENV_AMOUNT "MEGA_2"
+#define VCF_ENV_AMOUNT "MEGA_1"
 #define VCF_ATTACK     "MUX_7"
 #define VCF_DECAY      "MEGA_0"
 #define VCF_SUSTAIN    "MUX_8"
-#define VCF_RELEASE    "MEGA_1"
 // VCA (Amplifier) Controls
 #define VCA_ATTACK     "MEGA_4"
 #define VCA_DECAY      "MEGA_5"
@@ -170,7 +169,6 @@ int unoPotValues[4] = {0};
 AudioSynthWaveform waveform[18];
 AudioMixer4 vcoMixer[6];
 AudioFilterStateVariable filter[6];
-AudioEffectEnvelope filterEnv[6];
 AudioEffectEnvelope ampEnv[6];
 AudioMixer4 voiceMixer1, voiceMixer2;
 AudioMixer4 preEffectsMix;
@@ -251,17 +249,13 @@ struct FilterSettings {
   float attack;
   float decay;
   float sustain;
-  float release;
 };
 
-FilterSettings vcfSettings = {1000.0, 0.7, 0.0, 10.0, 100.0, 0.5, 200.0};
+FilterSettings vcfSettings = {1000.0, 0.7, 0.0, 10.0, 100.0, 0.5};
 
 struct FilterEnvState {
   bool active;
   unsigned long noteOnTime;
-  unsigned long noteOffTime;
-  bool released;
-  float lastValue;
 };
 
 FilterEnvState filterEnvState[6];
@@ -345,13 +339,6 @@ void setup() {
     filter[i].resonance(vcfSettings.resonance);
     
     filterEnvState[i].active = false;
-    filterEnvState[i].released = false;
-    filterEnvState[i].lastValue = 0.0;
-    
-    filterEnv[i].attack(vcfSettings.attack);
-    filterEnv[i].decay(vcfSettings.decay);
-    filterEnv[i].sustain(vcfSettings.sustain);
-    filterEnv[i].release(vcfSettings.release);
     
     ampEnv[i].attack(vcaSettings.attack);
     ampEnv[i].decay(vcaSettings.decay);
@@ -547,29 +534,17 @@ void readMuxPot(int channel, int potIndex) {
 // =====================================================
 float calculateFilterEnvelope(int voice, unsigned long now) {
   if (!filterEnvState[voice].active) return 0.0;
+
+  unsigned long elapsed = now - filterEnvState[voice].noteOnTime;
   
-  if (!filterEnvState[voice].released) {
-    unsigned long elapsed = now - filterEnvState[voice].noteOnTime;
-    
-    if (elapsed < vcfSettings.attack) {
-      return (float)elapsed / vcfSettings.attack;
-    } else if (elapsed < vcfSettings.attack + vcfSettings.decay) {
-      unsigned long decayElapsed = elapsed - vcfSettings.attack;
-      float decayProgress = (float)decayElapsed / vcfSettings.decay;
-      return 1.0 - (decayProgress * (1.0 - vcfSettings.sustain));
-    } else {
-      return vcfSettings.sustain;
-    }
+  if (elapsed < vcfSettings.attack) {
+    return (float)elapsed / vcfSettings.attack;
+  } else if (elapsed < vcfSettings.attack + vcfSettings.decay) {
+    unsigned long decayElapsed = elapsed - vcfSettings.attack;
+    float decayProgress = (float)decayElapsed / vcfSettings.decay;
+    return 1.0 - (decayProgress * (1.0 - vcfSettings.sustain));
   } else {
-    unsigned long elapsed = now - filterEnvState[voice].noteOffTime;
-    
-    if (elapsed < vcfSettings.release) {
-      float releaseProgress = (float)elapsed / vcfSettings.release;
-      return filterEnvState[voice].lastValue * (1.0 - releaseProgress);
-    } else {
-      filterEnvState[voice].active = false;
-      return 0.0;
-    }
+    return vcfSettings.sustain;
   }
 }
 
@@ -730,9 +705,6 @@ void updateVCFParameters() {
   float newAttack = (attackVal / 1023.0) * 2000.0;
   if (abs(newAttack - vcfSettings.attack) > 5.0) {
     vcfSettings.attack = newAttack;
-    for (int i = 0; i < 6; i++) {
-      filterEnv[i].attack(newAttack);
-    }
     changed = true;
   }
   
@@ -740,9 +712,6 @@ void updateVCFParameters() {
   float newDecay = (decayVal / 1023.0) * 2000.0;
   if (abs(newDecay - vcfSettings.decay) > 5.0) {
     vcfSettings.decay = newDecay;
-    for (int i = 0; i < 6; i++) {
-      filterEnv[i].decay(newDecay);
-    }
     changed = true;
   }
   
@@ -750,19 +719,6 @@ void updateVCFParameters() {
   float newSustain = sustainVal / 1023.0;
   if (abs(newSustain - vcfSettings.sustain) > 0.01) {
     vcfSettings.sustain = newSustain;
-    for (int i = 0; i < 6; i++) {
-      filterEnv[i].sustain(newSustain);
-    }
-    changed = true;
-  }
-  
-  int releaseVal = getControlValue(VCF_RELEASE, false);
-  float newRelease = (releaseVal / 1023.0) * 3000.0;
-  if (abs(newRelease - vcfSettings.release) > 5.0) {
-    vcfSettings.release = newRelease;
-    for (int i = 0; i < 6; i++) {
-      filterEnv[i].release(newRelease);
-    }
     changed = true;
   }
 }
@@ -953,10 +909,6 @@ void handleNoteEvent(byte cmd, byte note) {
       // Trigger filter and amplitude envelopes for this voice
       filterEnvState[v].active = true;
       filterEnvState[v].noteOnTime = millis();
-      filterEnvState[v].released = false;
-      filterEnvState[v].lastValue = 0.0;
-      
-      filterEnv[v].noteOn();
       ampEnv[v].noteOn();
     }
   } else {  // NoteOff
@@ -964,13 +916,8 @@ void handleNoteEvent(byte cmd, byte note) {
       if (fabs(activeFreq[v] - baseFreq) < 1.0) {
         activeFreq[v] = 0.0;
         
-        // Trigger release phase of envelopes
-        unsigned long now = millis();
-        filterEnvState[v].noteOffTime = now;
-        filterEnvState[v].released = true;
-        filterEnvState[v].lastValue = calculateFilterEnvelope(v, now);
-        
-        filterEnv[v].noteOff();
+        // Stop filter modulation immediately; the VCA keeps its release phase.
+        filterEnvState[v].active = false;
         ampEnv[v].noteOff();
         
         break;  // Only release one voice per note-off
