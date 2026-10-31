@@ -17,7 +17,7 @@ teensy 4.0 reads mainly potentiometer values and recieves data from the arduinos
 
 the arduino uno isn't currently used in the final version of the project here, but is connected to pots only.
 
-the arduino mega runs `src/mega/main.cpp` and is connected to the keyboard (5 octaves salvaged from a broken keyboard) through digital pins connected to the various PORTA,B,... D. this allows for faster reading of the keyboard. the keyboard has 2 buttons per key, so thus could be used to detect velocity or hardness of press, etc, but i can't be bothered adding a switch for it so it's currently just unused. the keyboard connected through a 8x8 matrix, where each key is described by a row and a column of the matrix (e.g. 2x3). the velocity sensing effectively creates a 16x8 matrix (note, 8x8 = 64 possible keys. 5 octave keyboard = 61 keys. see?). the mega is also connected to more pots.
+the arduino mega runs `src/mega/main.cpp` and is connected to the keyboard (5 octaves salvaged from a broken keyboard) through digital pins connected to the various PORTA,B,... D. The active 8x8 row/column matrix uses output pins `{10, 11, 12, 13, 51, 50, 53, 52}`. The previously used output pins `{48, 46, 44, 42, 43, 45, 47, 49}` are deprecated and no longer configured or scanned. The Mega is also connected to more pots.
 
 ## PlatformIO
 The three firmware targets are built separately from this repository root:
@@ -26,11 +26,11 @@ The three firmware targets are built separately from this repository root:
 - `pio run -e mega`
 - `pio run -e uno`
 
-The Teensy is the only I2C master. It polls the Mega at address `0x08` and the Uno at `0x09` every 5 ms. Each slave replies with four 3-byte packet slots; unused slots contain `0xFF`. Mega note packets retain the existing `{command, note, velocity}` format, Mega pot IDs remain `100` through `115`, and Uno pot IDs are `0` through `3`. Both slaves queue their initial pot readings at startup so the Teensy gets an initial value without waiting for knob movement.
+The Teensy is the only I2C master. It polls the Mega at address `0x08` and the Uno at `0x09` every 5 ms. Each slave replies with four 3-byte packet slots; unused slots contain `0xFF`. Mega note packets use `{command, note, reserved}`; note-on/off commands are `1`/`0`, and the Teensy uses a fixed voice gain. Mega pot IDs remain `100` through `115`, and Uno pot IDs are `0` through `3`. Both slaves queue their initial pot readings at startup so the Teensy gets an initial value without waiting for knob movement.
 
 Uno values are available in the Teensy mapping section as `UNO_0` through `UNO_3`. To assign one to a synth parameter, change that parameter's existing source string, for example `#define VCF_DECAY "UNO_0"`. Uno pots default to linear scaling and are not inverted.
 
-The Mega reads the piano's second key contacts on `{48, 46, 44, 42, 43, 45, 47, 49}`. These are the second 8-row bank, paired by index with the existing `rowPins`; both contact banks share the existing 8 column lines. Note-on waits for both contacts to close, and a shorter closure interval produces a higher velocity (0 ms maps to 127; 30 ms or longer maps to 1). Note-off is sent when both contacts open. `MAX_CONTACT_INTERVAL_US` in `src/mega/main.cpp` sets the velocity range; a lone contact is sent at minimum velocity after the 100 ms timeout.
+The Mega scans the active output pins against `rowPins`, starts each note as soon as the active contact closes, and sends note-off immediately when it opens. The formerly used output pins are retained in a source comment for wiring reference only and are not configured or scanned.
 
 Connect SDA to SDA, SCL to SCL, and share ground across all three boards. The Teensy 4.0 uses SDA 18/SCL 19; the Mega uses SDA 20/SCL 21; the Uno uses SDA A4/SCL A5. The Teensy is 3.3 V tolerant only: use a bidirectional I2C level shifter between the Teensy and the 5 V Arduino bus, with pull-ups appropriate for each side.
 

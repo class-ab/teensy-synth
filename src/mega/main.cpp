@@ -26,17 +26,11 @@ void readPots();
 
 // ---------- Keyboard Matrix ----------
 const byte rowPins[8] = {23, 22, 25, 24, 27, 26, 29, 28};     
-const byte velocityRowPins[8] = {48, 46, 44, 42, 43, 45, 47, 49};
-const byte colPins[8] = {10, 11, 12, 13, 51, 50, 53, 52};     
+const byte colPins[8] = {10, 11, 12, 13, 51, 50, 53, 52};
+// Deprecated bank from the previous scan: {48, 46, 44, 42, 43, 45, 47, 49}.
 bool keyState[8][8];
 bool lastKeyState[8][8];
-bool velocityKeyState[8][8];
-bool lastVelocityKeyState[8][8];
-bool noteOnPending[8][8] = {{false}};
 bool noteActive[8][8] = {{false}};
-unsigned long firstContactTime[8][8] = {{0}};
-const unsigned long MAX_CONTACT_INTERVAL_US = 30000UL;
-const unsigned long NOTE_ON_TIMEOUT_US = 100000UL;
 
 // ---------- Potentiometers ----------
 #define NUM_POTS 16
@@ -61,7 +55,6 @@ void setup() {
   }
   for (int r = 0; r < 8; r++) {
     pinMode(rowPins[r], INPUT_PULLUP);
-    pinMode(velocityRowPins[r], INPUT_PULLUP);
   }
   
   // Initialize arrays
@@ -106,60 +99,29 @@ void scanKeyboard() {
     delayMicroseconds(30);
     for (int r = 0; r < 8; r++) {
       keyState[r][c] = (digitalRead(rowPins[r]) == LOW);
-      velocityKeyState[r][c] = (digitalRead(velocityRowPins[r]) == LOW);
     }
     digitalWrite(colPins[c], HIGH);
   }
 }
 
 void reportKeyChanges() {
-  unsigned long now = micros();
-
   for (int r = 0; r < 8; r++) {
     for (int c = 0; c < 8; c++) {
       bool firstContactPressed = keyState[r][c];
-      bool secondContactPressed = velocityKeyState[r][c];
       bool firstContactRose = firstContactPressed && !lastKeyState[r][c];
-      bool secondContactRose = secondContactPressed && !lastVelocityKeyState[r][c];
       byte note = c * 8 + r + 36;
 
-      if (!noteActive[r][c] && (firstContactRose || secondContactRose)) {
-        if (firstContactRose && secondContactRose) {
-          enqueuePacket(1, note, 127);
-          noteActive[r][c] = true;
-          noteOnPending[r][c] = false;
-        } else if (noteOnPending[r][c]) {
-          unsigned long interval = now - firstContactTime[r][c];
-          if (interval > MAX_CONTACT_INTERVAL_US) {
-            interval = MAX_CONTACT_INTERVAL_US;
-          }
-          byte velocity = 127 - (interval * 126UL / MAX_CONTACT_INTERVAL_US);
-          enqueuePacket(1, note, velocity);
-          noteActive[r][c] = true;
-          noteOnPending[r][c] = false;
-        } else {
-          noteOnPending[r][c] = true;
-          firstContactTime[r][c] = now;
-        }
+      if (!noteActive[r][c] && firstContactRose) {
+        enqueuePacket(1, note, 0);
+        noteActive[r][c] = true;
       }
 
-      if (noteOnPending[r][c]) {
-        if (!firstContactPressed && !secondContactPressed) {
-          noteOnPending[r][c] = false;
-        } else if (now - firstContactTime[r][c] >= NOTE_ON_TIMEOUT_US) {
-          enqueuePacket(1, note, 1);
-          noteActive[r][c] = true;
-          noteOnPending[r][c] = false;
-        }
-      }
-
-      if (noteActive[r][c] && !firstContactPressed && !secondContactPressed) {
+      if (noteActive[r][c] && !firstContactPressed) {
         enqueuePacket(0, note, 0);
         noteActive[r][c] = false;
       }
 
       lastKeyState[r][c] = firstContactPressed;
-      lastVelocityKeyState[r][c] = secondContactPressed;
     }
   }
 }

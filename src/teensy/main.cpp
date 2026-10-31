@@ -308,7 +308,7 @@ void updateMasterVolume();
 int getControlValue(const char* control, bool isSwitch);
 int mapWaveform(int position);
 void updateActiveVoices();
-void handleNoteEvent(byte cmd, byte note, byte vel);
+void handleNoteEvent(byte cmd, byte note);
 
 // =====================================================
 // Setup
@@ -481,8 +481,8 @@ void pollController(uint8_t address) {
     }
 
     if (address == MEGA_ADDRESS) {
-      if (b0 == 0 || b0 == 1) {
-        handleNoteEvent(b0, b1, b2);
+      if (b0 <= 1) {
+        handleNoteEvent(b0, b1);
       } else if (b0 >= 100 && b0 < 116) {
         int megaIndex = b0 - 100;
         int value = 1023 - ((b1 << 8) | b2);
@@ -894,9 +894,9 @@ int mapWaveform(int position) {
 // =====================================================
 // Synth Voice Handling
 // =====================================================
-void handleNoteEvent(byte cmd, byte note, byte vel) {
+void handleNoteEvent(byte cmd, byte note) {
   float baseFreq = 440.0 * powf(2.0, (note - 69) / 12.0);
-  
+
   if (cmd == 1) {  // NoteOn
     Serial.println("NOTE RECEIVED");
     
@@ -926,11 +926,10 @@ void handleNoteEvent(byte cmd, byte note, byte vel) {
     
     if (freeVoice != -1) {
       int v = freeVoice;
-      float velocityGain = VOICE_MIX_BASE_GAIN * (constrain((int)vel, 1, 127) / 100.0f);
       if (v < 4) {
-        voiceMixer1.gain(v, velocityGain);
+        voiceMixer1.gain(v, VOICE_MIX_BASE_GAIN);
       } else {
-        voiceMixer2.gain(v - 4, velocityGain);
+        voiceMixer2.gain(v - 4, VOICE_MIX_BASE_GAIN);
       }
       
       // Set frequency immediately
