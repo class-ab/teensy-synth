@@ -11,13 +11,28 @@ the 'project report' file was the full project report i did on this. it's 20 som
 created as a fun project by yours truly. designed to copy various famous synths but also to build upon random features i though vaugely applicable, everything here is a bit of a mishmash of various ideas. but, most importantly, the teensy and complementary audio library allow for extreme modularity and customisation of literally everything. a really cool future project would be to turn this into a fully operational professional synth that allows for the plug in-n-out nature of modular rack synths, e.g. eurorack. could be implemented through digtally controlled patches or adjustable plugs, overall it could be a cool small form factor modular synth capable of running off a battery.
 
 ## method
-the teensy 4.0 runs the main code (main.ino). it's connected to the multiplexer and an arduino UNO and MEGA (i2c). 
+the teensy 4.0 runs the main code (`src/teensy/main.cpp`). it's connected to the multiplexer and an arduino UNO and MEGA (i2c).
 
 teensy 4.0 reads mainly potentiometer values and recieves data from the arduinos, namely more potentiometer values and the piano key presses.
 
 the arduino uno isn't currently used in the final version of the project here, but is connected to pots only.
 
-the arduino mega is connected to the keyboard (5 octaves salvaged from a broken keyboard) through digital pins connected to the various PORTA,B,... D. this allows for faster reading of the keyboard. the keyboard has 2 buttons per key, so thus could be used to detect velocity or hardness of press, etc, but i can't be bothered adding a switch for it so it's currently just unused. the keyboard connected through a 8x8 matrix, where each key is described by a row and a column of the matrix (e.g. 2x3). the velocity sensing effectively creates a 16x8 matrix (note, 8x8 = 64 possible keys. 5 octave keyboard = 61 keys. see?). the mega is also connected to more pots.
+the arduino mega runs `src/mega/main.cpp` and is connected to the keyboard (5 octaves salvaged from a broken keyboard) through digital pins connected to the various PORTA,B,... D. this allows for faster reading of the keyboard. the keyboard has 2 buttons per key, so thus could be used to detect velocity or hardness of press, etc, but i can't be bothered adding a switch for it so it's currently just unused. the keyboard connected through a 8x8 matrix, where each key is described by a row and a column of the matrix (e.g. 2x3). the velocity sensing effectively creates a 16x8 matrix (note, 8x8 = 64 possible keys. 5 octave keyboard = 61 keys. see?). the mega is also connected to more pots.
+
+## PlatformIO
+The three firmware targets are built separately from this repository root:
+
+- `pio run -e teensy40`
+- `pio run -e mega`
+- `pio run -e uno`
+
+The Teensy is the only I2C master. It polls the Mega at address `0x08` and the Uno at `0x09` every 5 ms. Each slave replies with four 3-byte packet slots; unused slots contain `0xFF`. Mega note packets retain the existing `{command, note, velocity}` format, Mega pot IDs remain `100` through `115`, and Uno pot IDs are `0` through `3`. Both slaves queue their initial pot readings at startup so the Teensy gets an initial value without waiting for knob movement.
+
+Uno values are available in the Teensy mapping section as `UNO_0` through `UNO_3`. To assign one to a synth parameter, change that parameter's existing source string, for example `#define VCF_DECAY "UNO_0"`. Uno pots default to linear scaling and are not inverted.
+
+The Mega reads the piano's second key contacts on `{48, 46, 44, 42, 43, 45, 47, 49}`. These are the second 8-row bank, paired by index with the existing `rowPins`; both contact banks share the existing 8 column lines. Note-on waits for both contacts to close, and a shorter closure interval produces a higher velocity (0 ms maps to 127; 30 ms or longer maps to 1). Note-off is sent when both contacts open. `MAX_CONTACT_INTERVAL_US` in `src/mega/main.cpp` sets the velocity range; a lone contact is sent at minimum velocity after the 100 ms timeout.
+
+Connect SDA to SDA, SCL to SCL, and share ground across all three boards. The Teensy 4.0 uses SDA 18/SCL 19; the Mega uses SDA 20/SCL 21; the Uno uses SDA A4/SCL A5. The Teensy is 3.3 V tolerant only: use a bidirectional I2C level shifter between the Teensy and the 5 V Arduino bus, with pull-ups appropriate for each side.
 
 ## issues
 - the teensy runs as 3.3v and the arduinos 5v. important to notice for both interchip communication and reading the pot values (i learnt the hard way for the later. several hours of resoldering ensued).

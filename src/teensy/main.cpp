@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <Wire.h>
 #include <Audio.h>
 // =====================================================
@@ -5,7 +6,11 @@
 // 6 voices × 3 VCOs = 18 waveform generators
 // Per-voice VCF and VCA
 // =====================================================
-#define MEGA_ADDRESS 0x08  // MEGA I2C slave address
+#define MEGA_ADDRESS 0x08
+#define UNO_ADDRESS 0x09
+const uint8_t I2C_PACKETS_PER_FRAME = 4;
+const uint8_t I2C_PACKET_SIZE = 3;
+const uint8_t I2C_FRAME_SIZE = I2C_PACKETS_PER_FRAME * I2C_PACKET_SIZE;
 
 // =====================================================
 // POTENTIOMETER SCALING CONFIGURATION
@@ -55,6 +60,13 @@ PotScaling megaPotScaling[16] = {
   {"MEGA_13", false},  // Reverb Damping - LINEAR
   {"MEGA_14", false},  // Reverb Mix - LINEAR
   {"MEGA_15", false}   // (unused)
+};
+
+PotScaling unoPotScaling[4] = {
+  {"UNO_0", false},
+  {"UNO_1", false},
+  {"UNO_2", false},
+  {"UNO_3", false}
 };
 
 // =====================================================
@@ -150,6 +162,7 @@ int positions[numSwitches][totalPositions] = {
 
 // Storage for MEGA pot values
 int megaPotValues[16] = {0};
+int unoPotValues[4] = {0};
 
 // =====================================================
 // Audio System
@@ -165,6 +178,7 @@ AudioEffectFreeverb reverb1;
 AudioMixer4 reverbMixer;
 AudioMixer4 finalMix;
 AudioOutputI2S i2s1;
+const float VOICE_MIX_BASE_GAIN = 0.25f;
 
 // Audio connections (same as original)
 AudioConnection patchCord1(waveform[0], 0, vcoMixer[0], 0);
@@ -279,7 +293,22 @@ const unsigned long MUX_INTERVAL = 50;
 unsigned long lastFilterUpdate = 0;
 const unsigned long FILTER_UPDATE_INTERVAL = 5;
 unsigned long lastI2CPoll = 0;
-const unsigned long I2C_POLL_INTERVAL = 0.01;  // Poll very fast (2ms) for notes
+const unsigned long I2C_POLL_INTERVAL = 5;
+
+void pollControllers();
+void pollController(uint8_t address);
+void updateFilterEnvelopes();
+void readMuxSwitch(int channel, int switchIndex);
+void readMuxPot(int channel, int potIndex);
+void updateVCOParameters();
+void updateVCFParameters();
+void updateVCAParameters();
+void updateReverbParameters();
+void updateMasterVolume();
+int getControlValue(const char* control, bool isSwitch);
+int mapWaveform(int position);
+void updateActiveVoices();
+void handleNoteEvent(byte cmd, byte note, byte vel);
 
 // =====================================================
 // Setup
@@ -331,8 +360,8 @@ void setup() {
   }
 
   for (int i = 0; i < 4; i++) {
-    voiceMixer1.gain(i, 0.25);
-    voiceMixer2.gain(i, 0.25);
+    voiceMixer1.gain(i, VOICE_MIX_BASE_GAIN);
+    voiceMixer2.gain(i, VOICE_MIX_BASE_GAIN);
   }
 
   preEffectsMix.gain(0, 0.5);
@@ -349,10 +378,10 @@ void setup() {
 
   // Initialize as I2C master only
   Wire.begin();  // Master mode
-  Wire.setClock(400000);  // 400kHz fast mode for quicker polling
+  Wire.setClock(100000);
 
   delay(1000);
-  Serial.println("I2C Master ready - fast polling MEGA");
+  Serial.println("I2C master ready - polling MEGA and UNO");
   
   // Print pot scaling configuration
   Serial.println("\n=== Pot Scaling Configuration ===");
@@ -365,6 +394,11 @@ void setup() {
   for (int i = 0; i < 16; i++) {
     Serial.printf("  %s: %s\n", megaPotScaling[i].name, 
                   megaPotScaling[i].isLogarithmic ? "LOGARITHMIC" : "LINEAR");
+  }
+  Serial.println("UNO Pots:");
+  for (int i = 0; i < 4; i++) {
+    Serial.printf("  %s: %s\n", unoPotScaling[i].name,
+                  unoPotScaling[i].isLogarithmic ? "LOGARITHMIC" : "LINEAR");
   }
   Serial.println("=================================");
   Serial.println("VCO Detune Range: ±5 semitones");
@@ -394,10 +428,10 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // Poll MEGA for note events and pot values
+  // Poll both I2C controller slaves for queued packets.
   if (now - lastI2CPoll >= I2C_POLL_INTERVAL) {
     lastI2CPoll = now;
-    pollMEGA();
+    pollControllers();
   }
 
   // Update filter envelopes
@@ -426,40 +460,43 @@ void loop() {
 }
 
 // =====================================================
-// I2C Polling - Request data from MEGA
+// I2C Polling - Request queued data from both controllers
 // =====================================================
-void pollMEGA() {
-  // Request 6 bytes to get 2 events per poll (more efficient)
-  int bytesReceived = Wire.requestFrom(MEGA_ADDRESS, 6);
+void pollControllers() {
+  pollController(MEGA_ADDRESS);
+  pollController(UNO_ADDRESS);
+}
+
+void pollController(uint8_t address) {
+  int bytesReceived = Wire.requestFrom(address, I2C_FRAME_SIZE);
   
-  while (bytesReceived >= 3) {
+  while (bytesReceived >= I2C_PACKET_SIZE && Wire.available() >= I2C_PACKET_SIZE) {
     byte b0 = Wire.read();
     byte b1 = Wire.read();
     byte b2 = Wire.read();
-    bytesReceived -= 3;
+    bytesReceived -= I2C_PACKET_SIZE;
     
-    if (b0 == 0 || b0 == 1) {
-      // Note event: cmd, note, velocity
-      handleNoteEvent(b0, b1, b2);
-    } else if (b0 >= 100 && b0 < 116) {
-      // MEGA pot: index (100-115), valueH, valueL
-      int megaIndex = b0 - 100;
-      int value = (b1 << 8) | b2;
-      value = 1023 - value;  // Invert
-      
-      // Apply scaling based on configuration
-      if (megaIndex < 16) {
-        value = applyPotScaling(value, megaPotScaling[megaIndex].isLogarithmic);
-        megaPotValues[megaIndex] = value;
-      }
-    } else if (b0 == 255) {
-      // Empty slot marker - no more data
-      // Clear remaining bytes
-      while (Wire.available()) {
-        Wire.read();
-      }
-      break;
+    if (b0 == 255) {
+      continue;
     }
+
+    if (address == MEGA_ADDRESS) {
+      if (b0 == 0 || b0 == 1) {
+        handleNoteEvent(b0, b1, b2);
+      } else if (b0 >= 100 && b0 < 116) {
+        int megaIndex = b0 - 100;
+        int value = 1023 - ((b1 << 8) | b2);
+        megaPotValues[megaIndex] = applyPotScaling(
+          value, megaPotScaling[megaIndex].isLogarithmic);
+      }
+    } else if (address == UNO_ADDRESS && b0 < 4) {
+      int value = (b1 << 8) | b2;
+      unoPotValues[b0] = applyPotScaling(value, unoPotScaling[b0].isLogarithmic);
+    }
+  }
+
+  while (Wire.available()) {
+    Wire.read();
   }
 }
 
@@ -832,6 +869,11 @@ int getControlValue(const char* control, bool isSwitch) {
     if (index >= 0 && index < 16) {
       return megaPotValues[index];
     }
+  } else if (strncmp(control, "UNO_", 4) == 0) {
+    int index = atoi(control + 4);
+    if (index >= 0 && index < 4) {
+      return unoPotValues[index];
+    }
   }
   return 0;
 }
@@ -884,6 +926,12 @@ void handleNoteEvent(byte cmd, byte note, byte vel) {
     
     if (freeVoice != -1) {
       int v = freeVoice;
+      float velocityGain = VOICE_MIX_BASE_GAIN * (constrain((int)vel, 1, 127) / 100.0f);
+      if (v < 4) {
+        voiceMixer1.gain(v, velocityGain);
+      } else {
+        voiceMixer2.gain(v - 4, velocityGain);
+      }
       
       // Set frequency immediately
       activeFreq[v] = baseFreq;
