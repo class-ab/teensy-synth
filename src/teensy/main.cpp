@@ -184,16 +184,16 @@ int positions[numSwitches][totalPositions] = {
 
 // Enter the measured Uno A0/A1 switch readings here; -1 disables a position.
 int unoLocationPositions[2][4] = {
-  {523, 562, 625, 672}, // A0: VCO pitch, VCF cutoff, VCA volume, off
-  {523, 562, 625, 672}  // A1: LFO 1 speed, LFO 1 volume, VCF resonance, off
+  {804, 867, 965, 1023}, // A0: VCO pitch, VCF cutoff, VCA volume, off
+  {804, 867, 965, 1023}  // A1: LFO 1 speed, LFO 1 volume, VCF resonance, off
 };
+const int unoLocationTolerance = 5;
 int unoLocationCurrentPos[2] = {LFO1_OFF, LFO2_OFF};
 int unoLocationRawValues[2] = {0, 0};
 
 // Storage for MEGA pot values
 int megaPotValues[16] = {0};
 int unoPotValues[4] = {0};
-const uint8_t UNO_RELAY_MESSAGE = 0xF0;
 
 // =====================================================
 // Audio System
@@ -336,7 +336,6 @@ const float LFO2_RESONANCE_RANGE = 4.3f;
 
 void pollControllers();
 void pollController(uint8_t address);
-void relayUnoReadingToMega(uint8_t id, uint8_t high, uint8_t low);
 void updateFilterEnvelopes();
 void updateLFOs();
 void readMuxSwitch(int channel, int switchIndex);
@@ -535,33 +534,20 @@ void pollController(uint8_t address) {
     } else if (address == UNO_ADDRESS) {
       int value = (b1 << 8) | b2;
       if (b0 < 2) {
+        Serial.printf("[UNO I2C] A%u = %d\n", (unsigned int)b0, value);
+      }
+      if (b0 < 2) {
         unoLocationRawValues[b0] = value;
         readUnoLocationSwitch(b0, value);
       } else if (b0 < 4) {
         unoPotValues[b0] = applyPotScaling(
           value, unoPotScaling[b0].isLogarithmic);
       }
-      if (b0 < 4) {
-        relayUnoReadingToMega(b0, b1, b2);
-      }
     }
   }
 
   while (Wire.available()) {
     Wire.read();
-  }
-}
-
-void relayUnoReadingToMega(uint8_t id, uint8_t high, uint8_t low) {
-  Wire.beginTransmission(MEGA_ADDRESS);
-  Wire.write(UNO_RELAY_MESSAGE);
-  Wire.write(id);
-  Wire.write(high);
-  Wire.write(low);
-  uint8_t error = Wire.endTransmission();
-  if (error != 0) {
-    Serial.printf("[I2C] Failed to relay UNO input %u to MEGA (error %u)\n",
-                  id, error);
   }
 }
 
@@ -597,13 +583,11 @@ void readMuxSwitch(int channel, int switchIndex) {
 void readUnoLocationSwitch(uint8_t switchIndex, int rawValue) {
   for (int position = 0; position < 4; position++) {
     int target = unoLocationPositions[switchIndex][position];
-    if (target >= 0 && rawValue >= target - switchTolerance &&
-        rawValue <= target + switchTolerance) {
+    if (target >= 0 && rawValue >= target - unoLocationTolerance &&
+        rawValue <= target + unoLocationTolerance) {
       int newPosition = position + 1;
       if (unoLocationCurrentPos[switchIndex] != newPosition) {
         unoLocationCurrentPos[switchIndex] = newPosition;
-        Serial.printf("[UNO] A%d location pos %d (raw %d)\n",
-                      switchIndex, newPosition, rawValue);
       }
       return;
     }
