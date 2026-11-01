@@ -33,7 +33,7 @@ PotScaling muxPotScaling[10] = {
   {"MUX_0", false},   // VCO1 Detune - LINEAR
   {"MUX_1", false},   // VCO2 Detune - LINEAR
   {"MUX_2", false},   // VCO3 Detune - LINEAR
-  {"MUX_3", false},   // Master Volume - LINEAR
+  {"MUX_3", true},    // Master Volume - LOGARITHMIC
   {"MUX_4", false},   // VCO2 Volume - LINEAR
   {"MUX_5", false},   // VCO3 Volume - LINEAR
   {"MUX_6", false},    // VCF Cutoff - LINEAR
@@ -46,19 +46,19 @@ PotScaling muxPotScaling[10] = {
 PotScaling megaPotScaling[16] = {
   {"MEGA_0", true},   // VCF Decay - LOGARITHMIC
   {"MEGA_1", false},  // VCF Env Amount - LINEAR
-  {"MEGA_2", false},  // LFO 1 Volume - LINEAR
-  {"MEGA_3", false},  // LFO 2 Volume - LINEAR
+  {"MEGA_2", false},  // LFO 1 Speed - LINEAR
+  {"MEGA_3", false},  // LFO 2 Speed - LINEAR
   {"MEGA_4", true},   // VCA Attack - LOGARITHMIC
   {"MEGA_5", true},   // VCA Decay - LOGARITHMIC
-  {"MEGA_6", false},  // LFO 1 Speed - LINEAR
-  {"MEGA_7", false},  // LFO 2 Speed - LINEAR
+  {"MEGA_6", false},  // LFO 1 Volume - LINEAR
+  {"MEGA_7", false},  // LFO 2 Volume - LINEAR
   {"MEGA_8", true},   // VCA Sustain - LOGARITHMIC
   {"MEGA_9", false},  // LFO 1 Waveform - LINEAR
   {"MEGA_10", false}, // LFO 2 Waveform - LINEAR
   {"MEGA_11", true},  // VCA Release - LOGARITHMIC
   {"MEGA_12", false},  // Reverb Time - LINEAR
-  {"MEGA_13", false},  // Unused (AudioEffectReverb has no damping control)
-  {"MEGA_14", false},  // Reverb Mix - LINEAR
+  {"MEGA_13", false},  // Reverb Mix - LINEAR
+  {"MEGA_14", false},  // Glissando - LINEAR
   {"MEGA_15", false}   // (unused)
 };
 
@@ -130,16 +130,17 @@ int reversePotScaling(int scaledValue, bool isLogarithmic) {
 #define VCA_RELEASE    "MEGA_11"
 // Reverb Controls
 #define REVERB_TIME     "MEGA_12"
-#define REVERB_MIX      "MEGA_14"
+#define REVERB_MIX      "MEGA_13"
+#define GLISSANDO       "MEGA_14"
 // LFO 1 Controls
-#define LFO1_VOLUME   "MEGA_2"
+#define LFO1_VOLUME   "MEGA_6"
 #define LFO1_LOCATION "UNO_LOCATION_0"
-#define LFO1_PITCH    "MEGA_6"
+#define LFO1_PITCH    "MEGA_2"
 #define LFO1_WAVEFORM "MEGA_9"
 // LFO 2 Controls
-#define LFO2_VOLUME   "MEGA_3"
+#define LFO2_VOLUME   "MEGA_7"
 #define LFO2_LOCATION "UNO_LOCATION_1"
-#define LFO2_PITCH    "MEGA_7"
+#define LFO2_PITCH    "MEGA_3"
 #define LFO2_WAVEFORM "MEGA_10"
 
 enum LFO1Location {
@@ -309,6 +310,11 @@ struct ReverbSettings {
 ReverbSettings reverbSettings = {2.55, 0.3};
 
 float activeFreq[6] = {0.0};
+float currentFreq[6] = {0.0};
+float glideStartFreq[6] = {0.0};
+unsigned long glideStartTimeMicros[6] = {0};
+unsigned long glideDurationMicros[6] = {0};
+float lastPlayedFrequency = 0.0f;
 float lfo1Phase = 0.0f;
 float lfo2Phase = 0.0f;
 float lfo1Output = 0.0f;
@@ -327,8 +333,11 @@ const unsigned long FILTER_UPDATE_INTERVAL_MICROS = 250;
 unsigned long lastI2CPoll = 0;
 const unsigned long I2C_POLL_INTERVAL = 5;
 unsigned long lastLfoUpdateMicros = 0;
-const float LFO_MIN_SPEED_HZ = 0.5f;
-const float LFO_MAX_SPEED_HZ = 1000.0f;
+unsigned long lastGlissandoUpdateMicros = 0;
+const float LFO_MIN_SPEED_HZ = 0.2f;
+const float LFO_MAX_SPEED_HZ = 400.0f;
+const float GLISSANDO_MAX_TIME_SECONDS = 2.0f;
+const unsigned long GLISSANDO_UPDATE_INTERVAL_MICROS = 1000;
 const float LFO1_PITCH_RANGE_SEMITONES = 5.0f;
 const float LFO1_CUTOFF_RANGE_OCTAVES = 4.0f;
 const float LFO2_SPEED_RANGE_OCTAVES = 2.0f;
@@ -351,6 +360,7 @@ int mapWaveform(int position);
 int mapPotToFourPosition(int value);
 float calculateLfoWaveform(float phase, int position);
 float calculateVcoFrequency(int voice, int vcoIndex);
+void updateGlissando();
 void updateActiveVoiceFrequencies();
 void updateActiveVoices();
 void handleNoteEvent(byte cmd, byte note);
@@ -473,6 +483,7 @@ void loop() {
   }
 
   updateLFOs();
+  updateGlissando();
 
   // Update filter envelopes and cutoff modulation at 4 kHz.
   unsigned long filterNowMicros = micros();
@@ -1020,8 +1031,40 @@ float calculateVcoFrequency(int voice, int vcoIndex) {
   int octaveShift = vco[vcoIndex].octave - 3;
   float octaveMultiplier = powf(2.0f, octaveShift);
   float semitoneOffset = vco[vcoIndex].detune + lfo1PitchOffsetSemitones;
-  return activeFreq[voice] * octaveMultiplier *
+  return currentFreq[voice] * octaveMultiplier *
     powf(2.0f, semitoneOffset / 12.0f);
+}
+
+void updateGlissando() {
+  unsigned long nowMicros = micros();
+  if (nowMicros - lastGlissandoUpdateMicros <
+      GLISSANDO_UPDATE_INTERVAL_MICROS) {
+    return;
+  }
+  lastGlissandoUpdateMicros = nowMicros;
+
+  for (int voice = 0; voice < 6; voice++) {
+    if (activeFreq[voice] <= 0.0f || glideDurationMicros[voice] == 0) {
+      continue;
+    }
+
+    unsigned long elapsedMicros =
+      nowMicros - glideStartTimeMicros[voice];
+    if (elapsedMicros >= glideDurationMicros[voice]) {
+      currentFreq[voice] = activeFreq[voice];
+      glideDurationMicros[voice] = 0;
+    } else {
+      float progress = (float)elapsedMicros / glideDurationMicros[voice];
+      currentFreq[voice] = glideStartFreq[voice] *
+        powf(activeFreq[voice] / glideStartFreq[voice], progress);
+    }
+
+    for (int vcoIndex = 0; vcoIndex < 3; vcoIndex++) {
+      int waveformIndex = voice * 3 + vcoIndex;
+      waveform[waveformIndex].frequency(
+        calculateVcoFrequency(voice, vcoIndex));
+    }
+  }
 }
 
 // =====================================================
@@ -1060,14 +1103,27 @@ void handleNoteEvent(byte cmd, byte note) {
     if (freeVoice != -1) {
       int v = freeVoice;
       float voiceGain = VOICE_MIX_BASE_GAIN * lfo1VcaGainMultiplier;
+      int glissandoValue = constrain(getControlValue(GLISSANDO, false), 0, 1023);
+      unsigned long glideDuration = (unsigned long)(
+        (glissandoValue / 1023.0f) * GLISSANDO_MAX_TIME_SECONDS *
+        1000000.0f);
+      float startingFrequency =
+        glideDuration > 0 && lastPlayedFrequency > 0.0f
+          ? lastPlayedFrequency
+          : baseFreq;
+
       if (v < 4) {
         voiceMixer1.gain(v, voiceGain);
       } else {
         voiceMixer2.gain(v - 4, voiceGain);
       }
       
-      // Set frequency immediately
       activeFreq[v] = baseFreq;
+      currentFreq[v] = startingFrequency;
+      glideStartFreq[v] = startingFrequency;
+      glideStartTimeMicros[v] = micros();
+      glideDurationMicros[v] = glideDuration;
+      lastPlayedFrequency = baseFreq;
       
       // Set all 3 VCOs for this voice
       for (int vco_num = 0; vco_num < 3; vco_num++) {

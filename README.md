@@ -30,9 +30,11 @@ The Teensy is the only I2C master. It polls the Mega at address `0x08` and the U
 
 The Uno prints its A0/A1 analog readings over USB serial at 115200 baud every 250 ms. The Teensy prints received Uno I2C location packets as `[UNO I2C] A0 = ...` or `A1 = ...` at 115200 baud. Use the A0/A1 readings to fill in the `unoLocationPositions` values in `src/teensy/main.cpp`; `-1` leaves a position uncalibrated. Uno potentiometers on A2/A3 are available as `UNO_2` and `UNO_3` in the Teensy mapping section. Uno pots default to linear scaling and are not inverted.
 
-The LFO control mappings are in `src/teensy/main.cpp`: LFO 1 volume/speed/waveform use Mega A2/A6/A9, and LFO 2 use Mega A3/A7/A10. The volume controls set modulation depth from 0 to 100%. Each waveform potentiometer is split into four equal ranges matching the VCO order (sine, sawtooth, square, triangle). LFO 1 locations on Uno A0 are VCO pitch, VCF cutoff, VCA volume, and off. LFO 2 locations on Uno A1 are LFO 1 speed, LFO 1 depth, VCF resonance, and off. Both LFO speed controls range from 0.5 Hz to 1 kHz.
+The LFO control mappings are in `src/teensy/main.cpp`: LFO 1 speed/volume/waveform use Mega A2/A6/A9, and LFO 2 use Mega A3/A7/A10. The volume controls set modulation depth from 0 to 100%. Each waveform potentiometer is split into four equal ranges matching the VCO order (sine, sawtooth, square, triangle). LFO 1 locations on Uno A0 are VCO pitch, VCF cutoff, VCA volume, and off. LFO 2 locations on Uno A1 are LFO 1 speed, LFO 1 depth, VCF resonance, and off. Both LFO speed controls range from 0.2 Hz to 400 Hz.
 
-On the Teensy, `MEGA_12` controls the reverb decay time from 0.1 to 5 seconds and `MEGA_14` controls its wet mix. `MEGA_13` is unused because the selected `AudioEffectReverb` does not expose a damping parameter.
+The master volume potentiometer is linear hardware; `MUX_3` applies software logarithmic scaling before setting the output gain.
+
+On the Teensy, `MEGA_12` controls the reverb decay time from 0.1 to 5 seconds, and `MEGA_13` controls its wet mix using the former DAMP dial location. The former Reverb MIX dial (`MEGA_14`) controls glissando: new notes glide from the previously played pitch, with the dial setting the glide time from zero to 2 seconds.
 
 The Mega scans the active output pins against `rowPins`, starts each note as soon as the active contact closes, and sends note-off immediately when it opens. The formerly used output pins are retained in a source comment for wiring reference only and are not configured or scanned.
 
