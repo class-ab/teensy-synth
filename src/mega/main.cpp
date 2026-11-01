@@ -11,18 +11,24 @@
 #define I2C_FRAME_SIZE (I2C_PACKET_SIZE * I2C_PACKETS_PER_FRAME)
 #define PACKET_QUEUE_CAPACITY 128
 #define PACKET_QUEUE_MASK (PACKET_QUEUE_CAPACITY - 1)
+#define UNO_RELAY_MESSAGE 0xF0
+#define UNO_RELAY_PACKET_SIZE 4
 
 volatile uint8_t packetQueue[PACKET_QUEUE_CAPACITY][I2C_PACKET_SIZE];
 volatile uint8_t queueHead = 0;
 volatile uint8_t queueTail = 0;
 volatile uint8_t queueOverflowCount = 0;
 uint8_t lastReportedOverflowCount = 0;
+volatile uint16_t unoRelayValues[4] = {0};
+volatile uint8_t unoRelayPendingMask = 0;
 
 void onI2CRequest();
+void onI2CReceive(int byteCount);
 bool enqueuePacket(uint8_t first, uint8_t second, uint8_t third);
 void scanKeyboard();
 void reportKeyChanges();
 void readPots();
+void reportUnoRelayValues();
 
 // ---------- Keyboard Matrix ----------
 const byte rowPins[8] = {23, 22, 25, 24, 27, 26, 29, 28};     
@@ -44,6 +50,7 @@ unsigned long lastPotSend = 0;
 void setup() {
   Wire.begin(MEGA_I2C_ADDRESS);
   Wire.onRequest(onI2CRequest);
+  Wire.onReceive(onI2CReceive);
   
   Serial.begin(115200);
   Serial.println("MEGA Keyboard + Pot controller ready");
@@ -82,7 +89,9 @@ void loop() {
     lastPotSend = now;
     readPots();
   }
-  
+
+  reportUnoRelayValues();
+
   if (queueOverflowCount != lastReportedOverflowCount) {
     lastReportedOverflowCount = queueOverflowCount;
     Serial.print("I2C packet queue overflows: ");
@@ -159,6 +168,46 @@ void onI2CRequest() {
   }
 
   Wire.write(frame, sizeof(frame));
+}
+
+void onI2CReceive(int byteCount) {
+  if (byteCount != UNO_RELAY_PACKET_SIZE) {
+    while (Wire.available()) {
+      Wire.read();
+    }
+    return;
+  }
+
+  uint8_t message = Wire.read();
+  uint8_t id = Wire.read();
+  uint8_t high = Wire.read();
+  uint8_t low = Wire.read();
+  if (message == UNO_RELAY_MESSAGE && id < 4) {
+    unoRelayValues[id] = ((uint16_t)high << 8) | low;
+    unoRelayPendingMask |= (uint8_t)(1U << id);
+  }
+}
+
+void reportUnoRelayValues() {
+  uint16_t values[4];
+  uint8_t pendingMask;
+
+  noInterrupts();
+  pendingMask = unoRelayPendingMask;
+  unoRelayPendingMask = 0;
+  for (uint8_t i = 0; i < 4; i++) {
+    values[i] = unoRelayValues[i];
+  }
+  interrupts();
+
+  for (uint8_t i = 0; i < 4; i++) {
+    if (pendingMask & (uint8_t)(1U << i)) {
+      Serial.print("[UNO I2C] A");
+      Serial.print(i);
+      Serial.print(" = ");
+      Serial.println(values[i]);
+    }
+  }
 }
 
 bool enqueuePacket(uint8_t first, uint8_t second, uint8_t third) {

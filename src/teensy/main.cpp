@@ -46,15 +46,15 @@ PotScaling muxPotScaling[10] = {
 PotScaling megaPotScaling[16] = {
   {"MEGA_0", true},   // VCF Decay - LOGARITHMIC
   {"MEGA_1", false},  // VCF Env Amount - LINEAR
-  {"MEGA_2", false},  // (unused)
-  {"MEGA_3", false},   // (unused)
+  {"MEGA_2", false},  // LFO 1 Volume - LINEAR
+  {"MEGA_3", false},  // LFO 2 Volume - LINEAR
   {"MEGA_4", true},   // VCA Attack - LOGARITHMIC
   {"MEGA_5", true},   // VCA Decay - LOGARITHMIC
-  {"MEGA_6", false},   // (unused)
-  {"MEGA_7", false},   // (unused)
+  {"MEGA_6", false},  // LFO 1 Speed - LINEAR
+  {"MEGA_7", false},  // LFO 2 Speed - LINEAR
   {"MEGA_8", true},   // VCA Sustain - LOGARITHMIC
-  {"MEGA_9", false},   // (unused)
-  {"MEGA_10", false},  // (unused)
+  {"MEGA_9", false},  // LFO 1 Waveform - LINEAR
+  {"MEGA_10", false}, // LFO 2 Waveform - LINEAR
   {"MEGA_11", true},  // VCA Release - LOGARITHMIC
   {"MEGA_12", false},  // Reverb Time - LINEAR
   {"MEGA_13", false},  // Unused (AudioEffectReverb has no damping control)
@@ -131,6 +131,30 @@ int reversePotScaling(int scaledValue, bool isLogarithmic) {
 // Reverb Controls
 #define REVERB_TIME     "MEGA_12"
 #define REVERB_MIX      "MEGA_14"
+// LFO 1 Controls
+#define LFO1_VOLUME   "MEGA_2"
+#define LFO1_LOCATION "UNO_LOCATION_0"
+#define LFO1_PITCH    "MEGA_6"
+#define LFO1_WAVEFORM "MEGA_9"
+// LFO 2 Controls
+#define LFO2_VOLUME   "MEGA_3"
+#define LFO2_LOCATION "UNO_LOCATION_1"
+#define LFO2_PITCH    "MEGA_7"
+#define LFO2_WAVEFORM "MEGA_10"
+
+enum LFO1Location {
+  LFO1_VCO_PITCH = 1,
+  LFO1_VCF_CUTOFF,
+  LFO1_VCA_VOLUME,
+  LFO1_OFF
+};
+
+enum LFO2Location {
+  LFO2_LFO1_SPEED = 1,
+  LFO2_LFO1_VOLUME,
+  LFO2_VCF_RESONANCE,
+  LFO2_OFF
+};
 
 // =====================================================
 // MUX Configuration
@@ -158,9 +182,18 @@ int positions[numSwitches][totalPositions] = {
   {646, 697, 776, 834}
 };
 
+// Enter the measured Uno A0/A1 switch readings here; -1 disables a position.
+int unoLocationPositions[2][4] = {
+  {523, 562, 625, 672}, // A0: VCO pitch, VCF cutoff, VCA volume, off
+  {523, 562, 625, 672}  // A1: LFO 1 speed, LFO 1 volume, VCF resonance, off
+};
+int unoLocationCurrentPos[2] = {LFO1_OFF, LFO2_OFF};
+int unoLocationRawValues[2] = {0, 0};
+
 // Storage for MEGA pot values
 int megaPotValues[16] = {0};
 int unoPotValues[4] = {0};
+const uint8_t UNO_RELAY_MESSAGE = 0xF0;
 
 // =====================================================
 // Audio System
@@ -276,22 +309,39 @@ struct ReverbSettings {
 ReverbSettings reverbSettings = {2.55, 0.3};
 
 float activeFreq[6] = {0.0};
+float lfo1Phase = 0.0f;
+float lfo2Phase = 0.0f;
+float lfo1Output = 0.0f;
+float lfo2Output = 0.0f;
+float lfo1PitchOffsetSemitones = 0.0f;
+float lfo1VcaGainMultiplier = 1.0f;
+float lastAppliedFilterResonance = -1.0f;
 
 // =====================================================
 // Timing
 // =====================================================
 unsigned long lastMuxTime = 0;
 const unsigned long MUX_INTERVAL = 50;
-unsigned long lastFilterUpdate = 0;
-const unsigned long FILTER_UPDATE_INTERVAL = 5;
+unsigned long lastFilterUpdateMicros = 0;
+const unsigned long FILTER_UPDATE_INTERVAL_MICROS = 250;
 unsigned long lastI2CPoll = 0;
 const unsigned long I2C_POLL_INTERVAL = 5;
+unsigned long lastLfoUpdateMicros = 0;
+const float LFO_MIN_SPEED_HZ = 0.5f;
+const float LFO_MAX_SPEED_HZ = 1000.0f;
+const float LFO1_PITCH_RANGE_SEMITONES = 5.0f;
+const float LFO1_CUTOFF_RANGE_OCTAVES = 4.0f;
+const float LFO2_SPEED_RANGE_OCTAVES = 2.0f;
+const float LFO2_RESONANCE_RANGE = 4.3f;
 
 void pollControllers();
 void pollController(uint8_t address);
+void relayUnoReadingToMega(uint8_t id, uint8_t high, uint8_t low);
 void updateFilterEnvelopes();
+void updateLFOs();
 void readMuxSwitch(int channel, int switchIndex);
 void readMuxPot(int channel, int potIndex);
+void readUnoLocationSwitch(uint8_t switchIndex, int rawValue);
 void updateVCOParameters();
 void updateVCFParameters();
 void updateVCAParameters();
@@ -299,6 +349,10 @@ void updateReverbParameters();
 void updateMasterVolume();
 int getControlValue(const char* control, bool isSwitch);
 int mapWaveform(int position);
+int mapPotToFourPosition(int value);
+float calculateLfoWaveform(float phase, int position);
+float calculateVcoFrequency(int voice, int vcoIndex);
+void updateActiveVoiceFrequencies();
 void updateActiveVoices();
 void handleNoteEvent(byte cmd, byte note);
 
@@ -403,6 +457,7 @@ void setup() {
   updateReverbParameters();
   updateMasterVolume();
 
+  lastLfoUpdateMicros = micros();
   Serial.println("Synth ready");
 }
 
@@ -418,9 +473,13 @@ void loop() {
     pollControllers();
   }
 
-  // Update filter envelopes
-  if (now - lastFilterUpdate >= FILTER_UPDATE_INTERVAL) {
-    lastFilterUpdate = now;
+  updateLFOs();
+
+  // Update filter envelopes and cutoff modulation at 4 kHz.
+  unsigned long filterNowMicros = micros();
+  if (filterNowMicros - lastFilterUpdateMicros >=
+      FILTER_UPDATE_INTERVAL_MICROS) {
+    lastFilterUpdateMicros = filterNowMicros;
     updateFilterEnvelopes();
   }
 
@@ -473,14 +532,36 @@ void pollController(uint8_t address) {
         megaPotValues[megaIndex] = applyPotScaling(
           value, megaPotScaling[megaIndex].isLogarithmic);
       }
-    } else if (address == UNO_ADDRESS && b0 < 4) {
+    } else if (address == UNO_ADDRESS) {
       int value = (b1 << 8) | b2;
-      unoPotValues[b0] = applyPotScaling(value, unoPotScaling[b0].isLogarithmic);
+      if (b0 < 2) {
+        unoLocationRawValues[b0] = value;
+        readUnoLocationSwitch(b0, value);
+      } else if (b0 < 4) {
+        unoPotValues[b0] = applyPotScaling(
+          value, unoPotScaling[b0].isLogarithmic);
+      }
+      if (b0 < 4) {
+        relayUnoReadingToMega(b0, b1, b2);
+      }
     }
   }
 
   while (Wire.available()) {
     Wire.read();
+  }
+}
+
+void relayUnoReadingToMega(uint8_t id, uint8_t high, uint8_t low) {
+  Wire.beginTransmission(MEGA_ADDRESS);
+  Wire.write(UNO_RELAY_MESSAGE);
+  Wire.write(id);
+  Wire.write(high);
+  Wire.write(low);
+  uint8_t error = Wire.endTransmission();
+  if (error != 0) {
+    Serial.printf("[I2C] Failed to relay UNO input %u to MEGA (error %u)\n",
+                  id, error);
   }
 }
 
@@ -507,6 +588,22 @@ void readMuxSwitch(int channel, int switchIndex) {
         currentPos[switchIndex] = p + 1;
         Serial.printf("[MUX] Switch %d → pos %d (raw %d)\n",
                       switchIndex + 1, currentPos[switchIndex], val);
+      }
+      return;
+    }
+  }
+}
+
+void readUnoLocationSwitch(uint8_t switchIndex, int rawValue) {
+  for (int position = 0; position < 4; position++) {
+    int target = unoLocationPositions[switchIndex][position];
+    if (target >= 0 && rawValue >= target - switchTolerance &&
+        rawValue <= target + switchTolerance) {
+      int newPosition = position + 1;
+      if (unoLocationCurrentPos[switchIndex] != newPosition) {
+        unoLocationCurrentPos[switchIndex] = newPosition;
+        Serial.printf("[UNO] A%d location pos %d (raw %d)\n",
+                      switchIndex, newPosition, rawValue);
       }
       return;
     }
@@ -547,15 +644,18 @@ float calculateFilterEnvelope(int voice, unsigned long now) {
 
 void updateFilterEnvelopes() {
   unsigned long now = millis();
+  float lfoCutoffOctaves =
+    getControlValue(LFO1_LOCATION, true) == LFO1_VCF_CUTOFF
+      ? lfo1Output * LFO1_CUTOFF_RANGE_OCTAVES
+      : 0.0f;
   
   for (int v = 0; v < 6; v++) {
-    if (filterEnvState[v].active || vcfSettings.envAmount > 0.01) {
-      float envValue = calculateFilterEnvelope(v, now);
-      float octaveShift = envValue * vcfSettings.envAmount * 4.0;
-      float modulatedCutoff = vcfSettings.cutoff * powf(2.0, octaveShift);
-      modulatedCutoff = constrain(modulatedCutoff, 20.0, 12000.0);
-      filter[v].frequency(modulatedCutoff);
-    }
+    float envValue = calculateFilterEnvelope(v, now);
+    float octaveShift =
+      envValue * vcfSettings.envAmount * 4.0f + lfoCutoffOctaves;
+    float modulatedCutoff = vcfSettings.cutoff * powf(2.0f, octaveShift);
+    modulatedCutoff = constrain(modulatedCutoff, 20.0f, 12000.0f);
+    filter[v].frequency(modulatedCutoff);
   }
 }
 
@@ -685,9 +785,7 @@ void updateVCFParameters() {
   float newRes = 0.7 + (resVal / 1023.0) * 4.3;
   if (abs(newRes - vcfSettings.resonance) > 0.05) {
     vcfSettings.resonance = newRes;
-    for (int i = 0; i < 6; i++) {
-      filter[i].resonance(newRes);
-    }
+    lastAppliedFilterResonance = -1.0f;
     changed = true;
   }
   
@@ -813,6 +911,11 @@ int getControlValue(const char* control, bool isSwitch) {
     if (index >= 0 && index < 16) {
       return megaPotValues[index];
     }
+  } else if (strncmp(control, "UNO_LOCATION_", 13) == 0) {
+    int index = atoi(control + 13);
+    if (index >= 0 && index < 2) {
+      return unoLocationCurrentPos[index];
+    }
   } else if (strncmp(control, "UNO_", 4) == 0) {
     int index = atoi(control + 4);
     if (index >= 0 && index < 4) {
@@ -833,6 +936,108 @@ int mapWaveform(int position) {
     case 4: return WAVEFORM_TRIANGLE;
     default: return WAVEFORM_SINE;
   }
+}
+
+int mapPotToFourPosition(int value) {
+  int boundedValue = constrain(value, 0, 1023);
+  int section = boundedValue * 4 / 1023;
+  return section >= 4 ? 4 : section + 1;
+}
+
+float calculateLfoWaveform(float phase, int position) {
+  switch (position) {
+    case 1: return sinf(phase * 6.28318530718f);
+    case 2: return 2.0f * phase - 1.0f;
+    case 3: return phase < 0.5f ? 1.0f : -1.0f;
+    case 4: return 1.0f - 4.0f * fabsf(phase - 0.5f);
+    default: return 0.0f;
+  }
+}
+
+void updateLFOs() {
+  unsigned long nowMicros = micros();
+  unsigned long elapsedMicros = nowMicros - lastLfoUpdateMicros;
+  if (elapsedMicros == 0) {
+    return;
+  }
+  lastLfoUpdateMicros = nowMicros;
+  float elapsedSeconds = elapsedMicros / 1000000.0f;
+
+  int lfo2SpeedValue = constrain(getControlValue(LFO2_PITCH, false), 0, 1023);
+  float lfo2Frequency = LFO_MIN_SPEED_HZ +
+    (LFO_MAX_SPEED_HZ - LFO_MIN_SPEED_HZ) * (lfo2SpeedValue / 1023.0f);
+  float lfo2Depth = constrain(getControlValue(LFO2_VOLUME, false), 0, 1023) /
+    1023.0f;
+  int lfo2WavePosition =
+    mapPotToFourPosition(getControlValue(LFO2_WAVEFORM, false));
+  int lfo2Location = getControlValue(LFO2_LOCATION, true);
+
+  lfo2Phase = fmodf(lfo2Phase + lfo2Frequency * elapsedSeconds, 1.0f);
+  lfo2Output = calculateLfoWaveform(lfo2Phase, lfo2WavePosition) * lfo2Depth;
+
+  int lfo1SpeedValue = constrain(getControlValue(LFO1_PITCH, false), 0, 1023);
+  float lfo1Frequency = LFO_MIN_SPEED_HZ +
+    (LFO_MAX_SPEED_HZ - LFO_MIN_SPEED_HZ) * (lfo1SpeedValue / 1023.0f);
+  if (lfo2Location == LFO2_LFO1_SPEED) {
+    lfo1Frequency *= powf(2.0f, lfo2Output * LFO2_SPEED_RANGE_OCTAVES);
+  }
+  lfo1Frequency = constrain(lfo1Frequency, LFO_MIN_SPEED_HZ, LFO_MAX_SPEED_HZ);
+
+  int lfo1WavePosition =
+    mapPotToFourPosition(getControlValue(LFO1_WAVEFORM, false));
+  int lfo1Location = getControlValue(LFO1_LOCATION, true);
+  float lfo1Depth = constrain(getControlValue(LFO1_VOLUME, false), 0, 1023) /
+    1023.0f;
+  if (lfo2Location == LFO2_LFO1_VOLUME) {
+    lfo1Depth = constrain(lfo1Depth + lfo2Output, 0.0f, 1.0f);
+  }
+
+  lfo1Phase = fmodf(lfo1Phase + lfo1Frequency * elapsedSeconds, 1.0f);
+  lfo1Output = calculateLfoWaveform(lfo1Phase, lfo1WavePosition) * lfo1Depth;
+
+  float newPitchOffset =
+    lfo1Location == LFO1_VCO_PITCH
+      ? lfo1Output * LFO1_PITCH_RANGE_SEMITONES
+      : 0.0f;
+  if (fabsf(newPitchOffset - lfo1PitchOffsetSemitones) > 0.01f) {
+    lfo1PitchOffsetSemitones = newPitchOffset;
+    updateActiveVoiceFrequencies();
+  }
+
+  float newVcaGainMultiplier = lfo1Location == LFO1_VCA_VOLUME
+    ? 1.0f - lfo1Depth * 0.5f + lfo1Output * 0.5f
+    : 1.0f;
+  if (fabsf(newVcaGainMultiplier - lfo1VcaGainMultiplier) > 0.005f) {
+    lfo1VcaGainMultiplier = newVcaGainMultiplier;
+    for (int voice = 0; voice < 6; voice++) {
+      float gain = VOICE_MIX_BASE_GAIN * lfo1VcaGainMultiplier;
+      if (voice < 4) {
+        voiceMixer1.gain(voice, gain);
+      } else {
+        voiceMixer2.gain(voice - 4, gain);
+      }
+    }
+  }
+
+  float modulatedResonance = vcfSettings.resonance;
+  if (lfo2Location == LFO2_VCF_RESONANCE) {
+    modulatedResonance += lfo2Output * LFO2_RESONANCE_RANGE;
+  }
+  modulatedResonance = constrain(modulatedResonance, 0.7f, 5.0f);
+  if (fabsf(modulatedResonance - lastAppliedFilterResonance) > 0.01f) {
+    lastAppliedFilterResonance = modulatedResonance;
+    for (int voice = 0; voice < 6; voice++) {
+      filter[voice].resonance(modulatedResonance);
+    }
+  }
+}
+
+float calculateVcoFrequency(int voice, int vcoIndex) {
+  int octaveShift = vco[vcoIndex].octave - 3;
+  float octaveMultiplier = powf(2.0f, octaveShift);
+  float semitoneOffset = vco[vcoIndex].detune + lfo1PitchOffsetSemitones;
+  return activeFreq[voice] * octaveMultiplier *
+    powf(2.0f, semitoneOffset / 12.0f);
 }
 
 // =====================================================
@@ -870,10 +1075,11 @@ void handleNoteEvent(byte cmd, byte note) {
     
     if (freeVoice != -1) {
       int v = freeVoice;
+      float voiceGain = VOICE_MIX_BASE_GAIN * lfo1VcaGainMultiplier;
       if (v < 4) {
-        voiceMixer1.gain(v, VOICE_MIX_BASE_GAIN);
+        voiceMixer1.gain(v, voiceGain);
       } else {
-        voiceMixer2.gain(v - 4, VOICE_MIX_BASE_GAIN);
+        voiceMixer2.gain(v - 4, voiceGain);
       }
       
       // Set frequency immediately
@@ -882,15 +1088,8 @@ void handleNoteEvent(byte cmd, byte note) {
       // Set all 3 VCOs for this voice
       for (int vco_num = 0; vco_num < 3; vco_num++) {
         int wfIndex = v * 3 + vco_num;
-        
-        // Calculate frequency with octave shift and detune
-        int octaveShift = vco[vco_num].octave - 3;  // Convert 1-4 to -2,-1,0,+1
-        float octaveMultiplier = powf(2.0, octaveShift);
-        // Detune is now in semitones (-5 to +5), convert to frequency multiplier
-        float detunedFreq = activeFreq[v] * octaveMultiplier * powf(2.0, vco[vco_num].detune / 12.0);
-        
         waveform[wfIndex].begin(vco[vco_num].waveform);
-        waveform[wfIndex].frequency(detunedFreq);
+        waveform[wfIndex].frequency(calculateVcoFrequency(v, vco_num));
         waveform[wfIndex].amplitude(1.0);  // Full amplitude, VCA controls volume
       }
       
@@ -922,16 +1121,22 @@ void updateActiveVoices() {
     if (activeFreq[v] > 0.0) {
       for (int vco_num = 0; vco_num < 3; vco_num++) {
         int wfIndex = v * 3 + vco_num;
-        
-        // Calculate frequency with octave shift and detune
-        int octaveShift = vco[vco_num].octave - 3;  // Convert 1-4 to -2,-1,0,+1
-        float octaveMultiplier = powf(2.0, octaveShift);
-        // Detune is now in semitones (-5 to +5), convert to frequency multiplier
-        float detunedFreq = activeFreq[v] * octaveMultiplier * powf(2.0, vco[vco_num].detune / 12.0);
-        
-        waveform[wfIndex].frequency(detunedFreq);
+        waveform[wfIndex].frequency(calculateVcoFrequency(v, vco_num));
         waveform[wfIndex].begin(vco[vco_num].waveform);
       }
+    }
+  }
+}
+
+void updateActiveVoiceFrequencies() {
+  for (int voice = 0; voice < 6; voice++) {
+    if (activeFreq[voice] <= 0.0f) {
+      continue;
+    }
+    for (int vcoIndex = 0; vcoIndex < 3; vcoIndex++) {
+      int waveformIndex = voice * 3 + vcoIndex;
+      waveform[waveformIndex].frequency(
+        calculateVcoFrequency(voice, vcoIndex));
     }
   }
 }

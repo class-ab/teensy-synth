@@ -15,7 +15,7 @@ the teensy 4.0 runs the main code (`src/teensy/main.cpp`). it's connected to the
 
 teensy 4.0 reads mainly potentiometer values and recieves data from the arduinos, namely more potentiometer values and the piano key presses.
 
-the arduino uno isn't currently used in the final version of the project here, but is connected to pots only.
+the Arduino Uno provides the two LFO location switches on A0/A1 and two remaining potentiometers on A2/A3.
 
 the arduino mega runs `src/mega/main.cpp` and is connected to the keyboard (5 octaves salvaged from a broken keyboard) through digital pins connected to the various PORTA,B,... D. The active 8x8 row/column matrix uses output pins `{10, 11, 12, 13, 51, 50, 53, 52}`. The previously used output pins `{48, 46, 44, 42, 43, 45, 47, 49}` are deprecated and no longer configured or scanned. The Mega is also connected to more pots.
 
@@ -26,9 +26,11 @@ The three firmware targets are built separately from this repository root:
 - `pio run -e mega`
 - `pio run -e uno`
 
-The Teensy is the only I2C master. It polls the Mega at address `0x08` and the Uno at `0x09` every 5 ms. Each slave replies with four 3-byte packet slots; unused slots contain `0xFF`. Mega note packets use `{command, note, reserved}`; note-on/off commands are `1`/`0`, and the Teensy uses a fixed voice gain. Mega pot IDs remain `100` through `115`, and Uno pot IDs are `0` through `3`. Both slaves queue their initial pot readings at startup so the Teensy gets an initial value without waiting for knob movement.
+The Teensy is the only I2C master. It polls the Mega at address `0x08` and the Uno at `0x09` every 5 ms. Each slave replies with four 3-byte packet slots; unused slots contain `0xFF`. Mega note packets use `{command, note, reserved}`; note-on/off commands are `1`/`0`, and the Teensy uses a fixed voice gain. Mega pot IDs remain `100` through `115`; Uno location-switch IDs are `0`/`1` for A0/A1, and Uno pot IDs are `2`/`3` for A2/A3. Both slaves queue their initial readings at startup so the Teensy gets initial values without waiting for knob movement.
 
-Uno values are available in the Teensy mapping section as `UNO_0` through `UNO_3`. To assign one to a synth parameter, change that parameter's existing source string, for example `#define VCF_DECAY "UNO_0"`. Uno pots default to linear scaling and are not inverted.
+The Uno prints its A0/A1 analog readings over USB serial at 115200 baud every 250 ms. The Teensy relays all changed Uno readings over I2C to the Mega, which prints them as `[UNO I2C] A0 = ...` through `[UNO I2C] A3 = ...` at 115200 baud. Use these readings to fill in the `unoLocationPositions` values in `src/teensy/main.cpp`; `-1` leaves a position uncalibrated. Uno potentiometers on A2/A3 are available as `UNO_2` and `UNO_3` in the Teensy mapping section. Uno pots default to linear scaling and are not inverted.
+
+The LFO control mappings are in `src/teensy/main.cpp`: LFO 1 volume/speed/waveform use Mega A2/A6/A9, and LFO 2 use Mega A3/A7/A10. The volume controls set modulation depth from 0 to 100%. Each waveform potentiometer is split into four equal ranges matching the VCO order (sine, sawtooth, square, triangle). LFO 1 locations on Uno A0 are VCO pitch, VCF cutoff, VCA volume, and off. LFO 2 locations on Uno A1 are LFO 1 speed, LFO 1 depth, VCF resonance, and off. Both LFO speed controls range from 0.5 Hz to 1 kHz.
 
 On the Teensy, `MEGA_12` controls the reverb decay time from 0.1 to 5 seconds and `MEGA_14` controls its wet mix. `MEGA_13` is unused because the selected `AudioEffectReverb` does not expose a damping parameter.
 
