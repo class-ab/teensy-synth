@@ -30,6 +30,8 @@ The Teensy is the only I2C master. It polls the Mega at address `0x08` and the U
 
 Uno values are available in the Teensy mapping section as `UNO_0` through `UNO_3`. To assign one to a synth parameter, change that parameter's existing source string, for example `#define VCF_DECAY "UNO_0"`. Uno pots default to linear scaling and are not inverted.
 
+On the Teensy, `MEGA_12` controls the reverb decay time from 0.1 to 5 seconds and `MEGA_14` controls its wet mix. `MEGA_13` is unused because the selected `AudioEffectReverb` does not expose a damping parameter.
+
 The Mega scans the active output pins against `rowPins`, starts each note as soon as the active contact closes, and sends note-off immediately when it opens. The formerly used output pins are retained in a source comment for wiring reference only and are not configured or scanned.
 
 Connect SDA to SDA, SCL to SCL, and share ground across all three boards. The Teensy 4.0 uses SDA 18/SCL 19; the Mega uses SDA 20/SCL 21; the Uno uses SDA A4/SCL A5. The Teensy is 3.3 V tolerant only: use a bidirectional I2C level shifter between the Teensy and the 5 V Arduino bus, with pull-ups appropriate for each side.

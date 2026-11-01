@@ -56,8 +56,8 @@ PotScaling megaPotScaling[16] = {
   {"MEGA_9", false},   // (unused)
   {"MEGA_10", false},  // (unused)
   {"MEGA_11", true},  // VCA Release - LOGARITHMIC
-  {"MEGA_12", false},  // Reverb Roomsize - LINEAR
-  {"MEGA_13", false},  // Reverb Damping - LINEAR
+  {"MEGA_12", false},  // Reverb Time - LINEAR
+  {"MEGA_13", false},  // Unused (AudioEffectReverb has no damping control)
   {"MEGA_14", false},  // Reverb Mix - LINEAR
   {"MEGA_15", false}   // (unused)
 };
@@ -129,8 +129,7 @@ int reversePotScaling(int scaledValue, bool isLogarithmic) {
 #define VCA_SUSTAIN    "MEGA_8"
 #define VCA_RELEASE    "MEGA_11"
 // Reverb Controls
-#define REVERB_ROOMSIZE "MEGA_12"
-#define REVERB_DAMPING  "MEGA_13"
+#define REVERB_TIME     "MEGA_12"
 #define REVERB_MIX      "MEGA_14"
 
 // =====================================================
@@ -172,7 +171,7 @@ AudioFilterStateVariable filter[6];
 AudioEffectEnvelope ampEnv[6];
 AudioMixer4 voiceMixer1, voiceMixer2;
 AudioMixer4 preEffectsMix;
-AudioEffectFreeverb reverb1;
+AudioEffectReverb reverb1;
 AudioMixer4 reverbMixer;
 AudioMixer4 finalMix;
 AudioOutputI2S i2s1;
@@ -270,12 +269,11 @@ struct AmplifierSettings {
 AmplifierSettings vcaSettings = {10.0, 100.0, 0.8, 200.0};
 
 struct ReverbSettings {
-  float roomsize;
-  float damping;
+  float time;
   float mix;
 };
 
-ReverbSettings reverbSettings = {0.5, 0.5, 0.3};
+ReverbSettings reverbSettings = {2.55, 0.3};
 
 float activeFreq[6] = {0.0};
 
@@ -354,8 +352,7 @@ void setup() {
   preEffectsMix.gain(0, 0.5);
   preEffectsMix.gain(1, 0.5);
 
-  reverb1.roomsize(reverbSettings.roomsize);
-  reverb1.damping(reverbSettings.damping);
+  reverb1.reverbTime(reverbSettings.time);
   reverbMixer.gain(0, 1.0 - reverbSettings.mix);
   reverbMixer.gain(1, reverbSettings.mix);
 
@@ -770,21 +767,12 @@ void updateVCAParameters() {
 void updateReverbParameters() {
   bool changed = false;
   
-  // Reverb room size: 0.0 to 1.0
-  int roomVal = getControlValue(REVERB_ROOMSIZE, false);
-  float newRoom = roomVal / 1023.0;
-  if (abs(newRoom - reverbSettings.roomsize) > 0.01) {
-    reverbSettings.roomsize = newRoom;
-    reverb1.roomsize(newRoom);
-    changed = true;
-  }
-  
-  // Reverb damping: 0.0 to 1.0
-  int dampVal = getControlValue(REVERB_DAMPING, false);
-  float newDamp = dampVal / 1023.0;
-  if (abs(newDamp - reverbSettings.damping) > 0.01) {
-    reverbSettings.damping = newDamp;
-    reverb1.damping(newDamp);
+  // Reverb time: 0.1 to 5.0 seconds
+  int timeVal = getControlValue(REVERB_TIME, false);
+  float newTime = 0.1f + (timeVal / 1023.0f) * 4.9f;
+  if (abs(newTime - reverbSettings.time) > 0.05f) {
+    reverbSettings.time = newTime;
+    reverb1.reverbTime(newTime);
     changed = true;
   }
   
